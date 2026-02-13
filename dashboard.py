@@ -3,17 +3,33 @@ Dashboard Streamlit - Wind Turbine Maintenance Prediction
 S3 + CSV → Graphiques features + Prédictions
 """
 
+"""
+Dashboard Streamlit - Wind Turbine Maintenance Prediction
+S3 + CSV → Graphiques features + Prédictions
+"""
+
 import streamlit as st
-import pandas as pd
-import plotly.graph_objects as go
-import plotly.express as px
-from plotly.subplots import make_subplots
-import numpy as np
-from datetime import datetime
-import joblib
-import os
-import boto3
-from dotenv import load_dotenv
+
+# Check requirements at startup
+import subprocess
+import sys
+
+try:
+    import pandas as pd
+    import numpy as np
+    from datetime import datetime
+    import joblib
+    import os
+    import boto3
+    from dotenv import load_dotenv
+    import plotly.graph_objects as go
+    import plotly.express as px
+    from plotly.subplots import make_subplots
+except ModuleNotFoundError as e:
+    st.error(f"❌ Missing package: {e}")
+    st.info("Installing missing packages...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "plotly", "boto3", "python-dotenv"])
+    st.rerun()
 
 st.set_page_config(page_title="🌬️ Turbine Monitor", layout="wide")
 
@@ -53,6 +69,45 @@ def load_dataset_from_csv(csv_path):
     """Load dataset from local CSV (cached)"""
     return pd.read_csv(csv_path)
 
+@st.cache_resource  # Cache permanent pour le modèle
+def load_model_from_s3(model_s3_path="models/turbine_model.pkl"):
+    """Load ML model from S3 (cached)"""
+    try:
+        load_dotenv()
+        acces_key = os.getenv("AWS_ACCESS_KEY_ID")
+        s_acces_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+        
+        session = boto3.Session(
+            aws_access_key_id=acces_key,
+            aws_secret_access_key=s_acces_key
+        )
+        
+        s3 = session.client("s3")
+        
+        # Télécharger le modèle en mémoire
+        import io
+        model_bytes = io.BytesIO()
+        s3.download_fileobj("projet-certif-dsfs-ft-38", model_s3_path, model_bytes)
+        model_bytes.seek(0)
+        
+        # Charger avec joblib
+        model = joblib.load(model_bytes)
+        return model
+    except Exception as e:
+        st.error(f"❌ Error loading model from S3: {str(e)}")
+        return None
+
+@st.cache_resource  # Cache permanent pour le modèle
+def load_model_from_local(model_path):
+    """Load ML model from local file (cached)"""
+    try:
+        return joblib.load(model_path)
+    except FileNotFoundError:
+        return None
+    except Exception as e:
+        st.error(f"❌ Error loading model: {str(e)}")
+        return None
+
 # ============================================================================
 # SIDEBAR - Configuration
 # ============================================================================
@@ -79,6 +134,24 @@ with st.sidebar:
         "Model Path (pkl)",
         value="turbine_model.pkl"
     )
+    
+    # Model source selection
+    st.subheader("Model Source")
+    model_source = st.radio(
+        "Load model from",
+        ["S3 (AWS)", "Local File"],
+        index=0,
+        help="Choose where to load the model"
+    )
+    
+    if model_source == "S3 (AWS)":
+        model_s3_path = st.text_input(
+            "S3 Model Path",
+            value="models/turbine_model.pkl",
+            help="Path in S3 bucket"
+        )
+    else:
+        model_s3_path = None
     
     # Turbine selection
     st.subheader("Turbine Selection")
@@ -167,25 +240,23 @@ df = df_filtered
 # LOAD MODEL
 # ============================================================================
 
-@st.cache_resource  # Cache permanent pour le modèle
-def load_model(model_path):
-    """Load ML model (cached)"""
-    try:
-        return joblib.load(model_path)
-    except FileNotFoundError:
-        return None
-
-try:
-    model = load_model(model_file)
-    model_loaded = True if model is not None else False
-    if model_loaded:
-        st.sidebar.success(f"✅ Model loaded")
+if model_source == "S3 (AWS)":
+    with st.spinner("⏳ Loading model from S3..."):
+        model = load_model_from_s3(model_s3_path)
+        if model is not None:
+            st.sidebar.success(f"✅ Model loaded from S3")
+            model_loaded = True
+        else:
+            st.sidebar.warning(f"⚠️ Model not found in S3: {model_s3_path}")
+            model_loaded = False
+else:
+    model = load_model_from_local(model_file)
+    if model is not None:
+        st.sidebar.success(f"✅ Model loaded from local")
+        model_loaded = True
     else:
         st.sidebar.warning(f"⚠️ Model not found: {model_file}")
-except Exception as e:
-    st.sidebar.warning(f"⚠️ Error loading model: {str(e)}")
-    model = None
-    model_loaded = False
+        model_loaded = False
 
 # ============================================================================
 # IDENTIFY COLUMNS
