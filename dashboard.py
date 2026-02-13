@@ -148,7 +148,7 @@ with st.sidebar:
         model_s3_path = None
     else:
         model_file = None
-        model_s3_path = "models/turbine_model.pkl"  # Path fixe en S3
+        model_s3_path = "dataset/Wind Turbine Predictive Maintenance_KAGGLE/turbine_model.pkl"  # Path correct S3
     
     # Turbine selection
     st.subheader("Turbine Selection")
