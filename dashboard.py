@@ -124,16 +124,11 @@ with st.sidebar:
     
     if data_source == "Local CSV":
         csv_file = st.text_input(
-            "CSV File Path",
+            "Dataset Path (CSV)",
             value="wind_turbine_maintenance_data.csv"
         )
     else:
         csv_file = None
-    
-    model_file = st.text_input(
-        "Model Path (pkl)",
-        value="turbine_model.pkl"
-    )
     
     # Model source selection
     st.subheader("Model Source")
@@ -144,14 +139,16 @@ with st.sidebar:
         help="Choose where to load the model"
     )
     
-    if model_source == "S3 (AWS)":
-        model_s3_path = st.text_input(
-            "S3 Model Path",
-            value="models/turbine_model.pkl",
-            help="Path in S3 bucket"
+    if model_source == "Local File":
+        model_file = st.text_input(
+            "Model Path (pkl)",
+            value="./turbine_model.pkl",
+            help="Local path to model file (e.g., ./turbine_model.pkl or ./models/turbine_model.pkl)"
         )
-    else:
         model_s3_path = None
+    else:
+        model_file = None
+        model_s3_path = "models/turbine_model.pkl"  # Path fixe en S3
     
     # Turbine selection
     st.subheader("Turbine Selection")
@@ -236,6 +233,51 @@ if df_filtered is None:
 st.toast(f"✅ Displaying Turbines {turbines_to_display} - Last {selected_time} ({len(df_filtered)} rows total)", icon="✅")
 df = df_filtered
 
+# Garder une copie des colonnes initiales pour l'affichage
+df_display = df.copy()
+
+# ============================================================================
+# FEATURE ENGINEERING (EN ARRIÈRE-PLAN POUR LE MODÈLE)
+# ============================================================================
+
+def engineer_features(df):
+    """Créer les features engineered pour le modèle"""
+    df = df.copy()
+    
+    # Features de base (excluant Turbine_ID et Maintenance_Label)
+    exclude_cols = ['Turbine_ID', 'Maintenance_Label']
+    base_features = [col for col in df_display.columns if col not in exclude_cols]
+    
+    # Lag features (1h, 6h, 24h)
+    for lag in [1, 6, 24]:
+        for col in base_features:
+            df[f'{col}_lag_{lag}h'] = df[col].shift(lag)
+    
+    # Rolling statistics (6h, 12h, 24h)
+    for window in [6, 12, 24]:
+        for col in base_features:
+            df[f'{col}_rolling_mean_{window}h'] = df[col].rolling(window=window).mean()
+            df[f'{col}_rolling_std_{window}h'] = df[col].rolling(window=window).std()
+            df[f'{col}_rolling_min_{window}h'] = df[col].rolling(window=window).min()
+            df[f'{col}_rolling_max_{window}h'] = df[col].rolling(window=window).max()
+    
+    # Interaction features
+    for i, col1 in enumerate(base_features):
+        for col2 in base_features[i+1:]:
+            df[f'{col1}_x_{col2}'] = df[col1] * df[col2]
+    
+    # Trend features (pente sur 6h)
+    for col in base_features:
+        df[f'{col}_trend_6h'] = df[col].diff(6)
+    
+    # Fill NaN values
+    df = df.fillna(method='bfill').fillna(method='ffill').fillna(0)
+    
+    return df
+
+# Feature engineering pour les prédictions
+df_model = engineer_features(df)
+
 # ============================================================================
 # LOAD MODEL
 # ============================================================================
@@ -264,7 +306,7 @@ else:
 
 # Exclure Turbine_ID et Maintenance_Label (case-sensitive!)
 exclude_cols = ['Turbine_ID', 'Maintenance_Label']
-feature_cols = [col for col in df.columns if col not in exclude_cols]
+feature_cols = [col for col in df_display.columns if col not in exclude_cols]
 
 # ============================================================================
 # MAIN DASHBOARD - FEATURES
@@ -286,11 +328,16 @@ if len(feature_cols) > 0:
         num_features = len(feature_cols)
         num_rows = (num_features + 1) // 2  # Arrondir à l'entier supérieur
         
+        # Adapter l'espacement vertical selon le nombre de rows
+        # Maximum autorisé = 1 / (rows - 1)
+        max_v_spacing = 1 / (num_rows - 1) if num_rows > 1 else 0.5
+        v_spacing = min(0.08, max_v_spacing * 0.9)  # Utiliser 90% du max
+        
         fig_all = make_subplots(
             rows=num_rows,
             cols=2,
             subplot_titles=[col.replace('_', ' ') for col in feature_cols],
-            vertical_spacing=0.12,
+            vertical_spacing=v_spacing,
             horizontal_spacing=0.1
         )
         
@@ -362,13 +409,13 @@ if len(feature_cols) > 0:
             # Stats
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                st.metric("Min", f"{df[col].min():.2f}")
+                st.metric("Min", f"{df_display[col].min():.2f}")
             with col2:
-                st.metric("Max", f"{df[col].max():.2f}")
+                st.metric("Max", f"{df_display[col].max():.2f}")
             with col3:
-                st.metric("Mean", f"{df[col].mean():.2f}")
+                st.metric("Mean", f"{df_display[col].mean():.2f}")
             with col4:
-                st.metric("Std", f"{df[col].std():.2f}")
+                st.metric("Std", f"{df_display[col].std():.2f}")
 else:
     st.error("No features found!")
 
@@ -381,8 +428,11 @@ st.header("🔮 Model Predictions")
 
 if model_loaded and model is not None:
     try:
-        # Préparer features pour le modèle
-        X = df[feature_cols].fillna(0)
+        # Utiliser les features engineered pour le modèle
+        exclude_cols = ['Turbine_ID', 'Maintenance_Label']
+        feature_cols_model = [col for col in df_model.columns if col not in exclude_cols]
+        
+        X = df_model[feature_cols_model].fillna(0)
         
         # Prédictions
         predictions = model.predict(X)
@@ -394,11 +444,12 @@ if model_loaded and model is not None:
         else:
             confidence = np.ones(len(X))
         
-        df['prediction'] = predictions
-        df['confidence'] = confidence
+        # Ajouter les prédictions au dataframe d'affichage
+        df_display['prediction'] = predictions
+        df_display['confidence'] = confidence
         
         # Afficher dernière prédiction
-        latest = df.iloc[-1]
+        latest = df_display.iloc[-1]
         
         col1, col2, col3 = st.columns(3)
         
@@ -420,18 +471,18 @@ if model_loaded and model is not None:
         with col3:
             if 'Turbine_ID' in df.columns:
                 st.metric("Turbine ID", f"{int(latest['Turbine_ID'])}")
-            st.metric("Total Rows", len(df))
+            st.metric("Total Rows", len(df_display))
         
         # Timeline prédictions
         st.subheader("Prediction Timeline")
         
-        fig_pred = go.Figure()
+        fig_pred = go.Figure()  # df_display
         
         colors = {0: "#28a745", 1: "#ffc107", 2: "#dc3545"}
         
         fig_pred.add_trace(go.Scatter(
-            x=list(range(len(df))),
-            y=df['prediction'].values,
+            x=list(range(len(df_display))),
+            y=df_display['prediction'].values,
             mode='markers+lines',
             marker=dict(
                 size=6,
@@ -518,7 +569,7 @@ if model_loaded and model is not None:
             st.plotly_chart(fig_comp, use_container_width=True)
             
             # Accuracy metrics
-            accuracy = (df['prediction'] == df['Maintenance_Label']).sum() / len(df)
+            accuracy = (df['prediction'] == df['Maintenance_Label']).sum() / len(df_display)
             st.metric("Prediction Accuracy", f"{accuracy:.1%}")
     
     except Exception as e:
@@ -527,7 +578,15 @@ if model_loaded and model is not None:
 
 else:
     st.warning("⚠️ Model not loaded")
-    st.info(f"Check that model file exists: {model_file}")
+    if model_source == "Local File":
+        import os
+        abs_path = os.path.abspath(model_file) if model_file else "Unknown"
+        st.error(f"❌ Model file not found: {model_file}")
+        st.info(f"Looking for: {abs_path}")
+        st.info("Try placing the file in the same directory as dashboard.py or use the full path (e.g., ./models/turbine_model.pkl)")
+    else:
+        st.error(f"❌ Model not found in S3: {model_s3_path}")
+        st.info("Check AWS credentials and S3 path")
 
 # ============================================================================
 # RAW DATA TABLE
@@ -537,9 +596,9 @@ st.divider()
 st.header("📋 Raw Data")
 
 if st.checkbox("Show full table", value=False):
-    st.dataframe(df, use_container_width=True, height=500)
+    st.dataframe(df_display, use_container_width=True, height=500)
 else:
-    st.dataframe(df.head(20), use_container_width=True)
+    st.dataframe(df_display.head(20), use_container_width=True)
 
 # ============================================================================
 # FOOTER
@@ -553,7 +612,7 @@ with col1:
     else:
         st.caption(f"📁 File: {os.path.basename(csv_file) if csv_file else 'Unknown'}")
 with col2:
-    st.caption(f"📊 Total rows: {len(df)}")
+    st.caption(f"📊 Total rows: {len(df_display)}")
 with col3:
     st.caption(f"🎯 Features: {len(feature_cols)}")
 with col4:
