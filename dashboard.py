@@ -1,8 +1,3 @@
-"""
-Dashboard Wind Turbine - Turbine 1
-Production Ready - Simple Model (8 raw features)
-"""
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -12,45 +7,88 @@ import plotly.graph_objects as go
 import plotly.express as px
 import glob
 import os
+import boto3
+from io import BytesIO
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 st.set_page_config(page_title="🌬️ Turbine 1", layout="wide")
 st.title("🌬️ Wind Turbine Maintenance - Turbine 1")
 
 # ============================================================================
-# AUTO-DETECT MODELS & DATASETS
+# AWS S3 CONFIGURATION
 # ============================================================================
 
-# Find all .pkl files (models)
-available_models = glob.glob("*.pkl")
+AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+S3_BUCKET = "projet-certif-dsfs-ft-38"
+S3_PREFIX = "dataset/Wind Turbine Predictive Maintenance_KAGGLE/"
+
+# Initialize S3 client
+s3_client = boto3.client(
+    's3',
+    aws_access_key_id=AWS_ACCESS_KEY,
+    aws_secret_access_key=AWS_SECRET_KEY
+)
+
+# ============================================================================
+# AUTO-DETECT MODELS & DATASETS FROM S3
+# ============================================================================
+
+@st.cache_data(ttl=3600)
+def get_s3_files(prefix, extension):
+    """List files in S3 with given extension"""
+    try:
+        response = s3_client.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix)
+        if 'Contents' not in response:
+            return []
+        files = [obj['Key'].split('/')[-1] for obj in response['Contents'] 
+                if obj['Key'].endswith(extension)]
+        return sorted(files)
+    except:
+        return []
+
+# Get available models and datasets
+available_models = get_s3_files(S3_PREFIX, '.pkl')
+available_datasets = get_s3_files(S3_PREFIX, '.csv')
+
 if not available_models:
-    available_models = ["model_simple.pkl"]  # Default fallback
-
-# Find all .csv files (datasets)
-available_datasets = glob.glob("*.csv")
+    available_models = ["model_simple.pkl"]
 if not available_datasets:
-    available_datasets = ["wind_turbine_maintenance_data.csv"]  # Default fallback
+    available_datasets = ["wind_turbine_maintenance_data.csv"]
 
 # ============================================================================
-# LOAD DATA & MODEL
+# LOAD DATA & MODEL FROM S3
 # ============================================================================
 
-@st.cache_data
+@st.cache_data(ttl=3600)
 def load_data(dataset_name):
-    df = pd.read_csv(dataset_name)
-    # Filter to Turbine 1 if it has Turbine_ID column
-    if 'Turbine_ID' in df.columns:
-        df = df[df['Turbine_ID'] == 1].reset_index(drop=True)
-    return df
+    """Load CSV from S3"""
+    try:
+        s3_key = f"{S3_PREFIX}{dataset_name}"
+        obj = s3_client.get_object(Bucket=S3_BUCKET, Key=s3_key)
+        df = pd.read_csv(obj['Body'])
+        # Filter to Turbine 1 if it has Turbine_ID column
+        if 'Turbine_ID' in df.columns:
+            df = df[df['Turbine_ID'] == 1].reset_index(drop=True)
+        return df
+    except Exception as e:
+        st.error(f"Error loading dataset from S3: {str(e)}")
+        return pd.DataFrame()
 
 @st.cache_resource
 def load_model(model_name):
+    """Load model from S3"""
     try:
-        return joblib.load(model_name)
-    except:
+        s3_key = f"{S3_PREFIX}{model_name}"
+        obj = s3_client.get_object(Bucket=S3_BUCKET, Key=s3_key)
+        model_bytes = BytesIO(obj['Body'].read())
+        return joblib.load(model_bytes)
+    except Exception as e:
+        st.error(f"Error loading model from S3: {str(e)}")
         return None
-
-# Load based on selection (need to get sidebar values first)
-# This will be done after sidebar definition
 
 # Placeholder - will be updated after sidebar
 df = None
