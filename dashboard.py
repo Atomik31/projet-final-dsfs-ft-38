@@ -1,6 +1,6 @@
 """
 Dashboard Wind Turbine - Turbine 1
-Local file loading - Windows compatible
+Local file loading - Windows + Streamlit Cloud compatible
 """
 
 import streamlit as st
@@ -36,10 +36,6 @@ def find_data_dir():
 DATA_DIR = find_data_dir()
 MODELS_DIR = DATA_DIR / "models"
 
-st.write(f"📁 Loading from: `{DATA_DIR.resolve()}`")
-
-# Messages de debug supprimés pour une UI propre
-
 # ============================================================================
 # AUTO-DETECT MODELS & DATASETS LOCALLY
 # ============================================================================
@@ -54,13 +50,14 @@ def get_local_files(directory, extension):
 available_models = get_local_files(MODELS_DIR, '.pkl')
 available_datasets = get_local_files(DATA_DIR, '.csv')
 
+# Ne jamais mettre un faux nom si rien n'est trouvé
 if not available_models:
-    st.warning("⚠️ No .pkl models found")
-    available_models = ["No models available"]
+    st.error("❌ No .pkl models found in data/models/")
+    st.stop()
 
 if not available_datasets:
-    st.warning("⚠️ No .csv datasets found")
-    available_datasets = ["No datasets available"]
+    st.error("❌ No .csv datasets found in data/")
+    st.stop()
 
 # ============================================================================
 # LOAD DATA & MODEL FROM LOCAL FILES
@@ -81,39 +78,10 @@ def load_data(dataset_name):
 
 @st.cache_resource
 def load_model(model_name):
-    """Load model from local OR S3"""
+    """Load model locally"""
     try:
-        # D'abord essayer local (pour dev)
         filepath = MODELS_DIR / model_name
-        if filepath.exists():
-            return joblib.load(filepath)
-        
-        # Sinon charger depuis S3 (pour Streamlit Cloud)
-        import os
-        import boto3
-        from io import BytesIO
-        
-        AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY_ID")
-        AWS_SECRET_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
-        
-        if not AWS_ACCESS_KEY or not AWS_SECRET_KEY:
-            st.error("❌ AWS credentials not found")
-            return None
-        
-        s3_client = boto3.client(
-            's3',
-            aws_access_key_id=AWS_ACCESS_KEY,
-            aws_secret_access_key=AWS_SECRET_KEY
-        )
-        
-        S3_BUCKET = "projet-certif-dsfs-ft-38"
-        S3_PREFIX = "dataset/Wind Turbine Predictive Maintenance_KAGGLE/"
-        s3_key = f"{S3_PREFIX}{model_name}"
-        
-        obj = s3_client.get_object(Bucket=S3_BUCKET, Key=s3_key)
-        model_bytes = BytesIO(obj['Body'].read())
-        return joblib.load(model_bytes)
-        
+        return joblib.load(filepath)
     except Exception as e:
         st.error(f"Error loading model: {str(e)}")
         return None
@@ -180,8 +148,6 @@ if st.session_state.last_dataset != dataset_choice:
 
 df = load_data(dataset_choice)
 model = load_model(model_choice)
-
-# Message supprimé pour une UI épurée
 
 df_filtered = df.copy()
 if hours_limit:
@@ -286,8 +252,6 @@ else:
 # Apply feature engineering ONLY for complex models
 if use_engineering and isinstance(model, dict) and 'feature_columns' in model:
     df_filtered = engineer_features(df_filtered)
-
-# Message de debug supprimé
 
 # ============================================================================
 # SECTION 1: REAL-TIME STATUS
