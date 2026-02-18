@@ -16,12 +16,27 @@ st.set_page_config(page_title="🌬️ Turbine 1", layout="wide")
 st.title("🌬️ Wind Turbine Maintenance - Turbine 1")
 
 # ============================================================================
-# 🔧 CONFIGURATION DES CHEMINS
+# 🔧 CONFIGURATION DES CHEMINS - AUTO-DETECTION
 # ============================================================================
 
-# Structure simple: dashboard.py est à la racine, data/ est au même niveau
-DATA_DIR = Path("data")
-MODELS_DIR = Path("data/models")
+def find_data_dir():
+    """Cherche le dossier 'data' en remontant depuis le script"""
+    # Commencer par le répertoire du script
+    current = Path(__file__).parent.absolute()
+    
+    # Remonter jusqu'à 3 niveaux pour trouver 'data/'
+    for _ in range(3):
+        if (current / "data").exists():
+            return current / "data"
+        current = current.parent
+    
+    # Fallback: répertoire courant
+    return Path.cwd() / "data"
+
+DATA_DIR = find_data_dir()
+MODELS_DIR = DATA_DIR / "models"
+
+st.write(f"📁 Loading from: `{DATA_DIR.resolve()}`")
 
 # Messages de debug supprimés pour une UI propre
 
@@ -38,14 +53,6 @@ def get_local_files(directory, extension):
 
 available_models = get_local_files(MODELS_DIR, '.pkl')
 available_datasets = get_local_files(DATA_DIR, '.csv')
-
-# DEBUG: Afficher ce qui a été trouvé
-with st.sidebar:
-    with st.expander("🔍 Debug Info"):
-        st.write(f"**DATA_DIR:** `{DATA_DIR.resolve()}`")
-        st.write(f"**MODELS_DIR:** `{MODELS_DIR.resolve()}`")
-        st.write(f"**Datasets found:** {available_datasets}")
-        st.write(f"**Models found:** {available_models}")
 
 if not available_models:
     st.warning("⚠️ No .pkl models found")
