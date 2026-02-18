@@ -16,21 +16,12 @@ st.set_page_config(page_title="🌬️ Turbine 1", layout="wide")
 st.title("🌬️ Wind Turbine Maintenance - Turbine 1")
 
 # ============================================================================
-# 🔧 CONFIGURATION DES CHEMINS (À ADAPTER À TON PROJET)
+# 🔧 CONFIGURATION DES CHEMINS
 # ============================================================================
 
-# ⚠️ CHANGE CES CHEMINS SI NÉCESSAIRE:
-# 1. Mets les chemins absolus vers tes dossiers
-# 2. Utilise r"chemin\avec\backslash" sur Windows
-# 3. Ou utilise des chemins relatifs depuis le dossier du script
-
-# Option 1: Chemins absolus (pour Windows)
-DATA_DIR = Path(r"data")  # Relatif: dossier "data/" au même niveau que le script
-MODELS_DIR = Path(r"data\models")  # Relatif: dossier "data/models"
-
-# Option 2: Si tu veux utiliser des chemins absolus Windows:
-# DATA_DIR = Path(r"C:\Users\Juju\Documents\GitHub\Jedha\DATA\03-Python\Projets\Projet-final\data")
-# MODELS_DIR = Path(r"C:\Users\Juju\Documents\GitHub\Jedha\DATA\03-Python\Projets\Projet-final\data\models")
+# Structure simple: dashboard.py est à la racine, data/ est au même niveau
+DATA_DIR = Path("data")
+MODELS_DIR = Path("data/models")
 
 # Messages de debug supprimés pour une UI propre
 
@@ -47,6 +38,14 @@ def get_local_files(directory, extension):
 
 available_models = get_local_files(MODELS_DIR, '.pkl')
 available_datasets = get_local_files(DATA_DIR, '.csv')
+
+# DEBUG: Afficher ce qui a été trouvé
+with st.sidebar:
+    with st.expander("🔍 Debug Info"):
+        st.write(f"**DATA_DIR:** `{DATA_DIR.resolve()}`")
+        st.write(f"**MODELS_DIR:** `{MODELS_DIR.resolve()}`")
+        st.write(f"**Datasets found:** {available_datasets}")
+        st.write(f"**Models found:** {available_models}")
 
 if not available_models:
     st.warning("⚠️ No .pkl models found")
@@ -75,10 +74,39 @@ def load_data(dataset_name):
 
 @st.cache_resource
 def load_model(model_name):
-    """Load model locally"""
+    """Load model from local OR S3"""
     try:
+        # D'abord essayer local (pour dev)
         filepath = MODELS_DIR / model_name
-        return joblib.load(filepath)
+        if filepath.exists():
+            return joblib.load(filepath)
+        
+        # Sinon charger depuis S3 (pour Streamlit Cloud)
+        import os
+        import boto3
+        from io import BytesIO
+        
+        AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY_ID")
+        AWS_SECRET_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+        
+        if not AWS_ACCESS_KEY or not AWS_SECRET_KEY:
+            st.error("❌ AWS credentials not found")
+            return None
+        
+        s3_client = boto3.client(
+            's3',
+            aws_access_key_id=AWS_ACCESS_KEY,
+            aws_secret_access_key=AWS_SECRET_KEY
+        )
+        
+        S3_BUCKET = "projet-certif-dsfs-ft-38"
+        S3_PREFIX = "dataset/Wind Turbine Predictive Maintenance_KAGGLE/"
+        s3_key = f"{S3_PREFIX}{model_name}"
+        
+        obj = s3_client.get_object(Bucket=S3_BUCKET, Key=s3_key)
+        model_bytes = BytesIO(obj['Body'].read())
+        return joblib.load(model_bytes)
+        
     except Exception as e:
         st.error(f"Error loading model: {str(e)}")
         return None
