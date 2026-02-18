@@ -1,6 +1,6 @@
 """
 Dashboard Wind Turbine - Turbine 1
-Production Ready - Handles dict models with scaler
+Local file loading - Windows compatible
 """
 
 import streamlit as st
@@ -10,68 +10,62 @@ from datetime import datetime
 import joblib
 import plotly.graph_objects as go
 import plotly.express as px
-import boto3
-from io import BytesIO
-from dotenv import load_dotenv
-import os
-
-# Load environment variables
-load_dotenv()
+from pathlib import Path
 
 st.set_page_config(page_title="🌬️ Turbine 1", layout="wide")
 st.title("🌬️ Wind Turbine Maintenance - Turbine 1")
 
 # ============================================================================
-# AWS S3 CONFIGURATION
+# 🔧 CONFIGURATION DES CHEMINS (À ADAPTER À TON PROJET)
 # ============================================================================
 
-AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY_ID")
-AWS_SECRET_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
-S3_BUCKET = "projet-certif-dsfs-ft-38"
-S3_PREFIX = "dataset/Wind Turbine Predictive Maintenance_KAGGLE/"
+# ⚠️ CHANGE CES CHEMINS SI NÉCESSAIRE:
+# 1. Mets les chemins absolus vers tes dossiers
+# 2. Utilise r"chemin\avec\backslash" sur Windows
+# 3. Ou utilise des chemins relatifs depuis le dossier du script
 
-s3_client = boto3.client(
-    's3',
-    aws_access_key_id=AWS_ACCESS_KEY,
-    aws_secret_access_key=AWS_SECRET_KEY
-)
+# Option 1: Chemins absolus (pour Windows)
+DATA_DIR = Path(r"data")  # Relatif: dossier "data/" au même niveau que le script
+MODELS_DIR = Path(r"data\models")  # Relatif: dossier "data/models"
+
+# Option 2: Si tu veux utiliser des chemins absolus Windows:
+# DATA_DIR = Path(r"C:\Users\Juju\Documents\GitHub\Jedha\DATA\03-Python\Projets\Projet-final\data")
+# MODELS_DIR = Path(r"C:\Users\Juju\Documents\GitHub\Jedha\DATA\03-Python\Projets\Projet-final\data\models")
+
+# Messages de debug supprimés pour une UI propre
 
 # ============================================================================
-# AUTO-DETECT MODELS & DATASETS FROM S3
+# AUTO-DETECT MODELS & DATASETS LOCALLY
 # ============================================================================
 
-@st.cache_data(ttl=60)
-def get_s3_files(prefix, extension):
-    """List files in S3 with given extension"""
-    try:
-        response = s3_client.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix)
-        if 'Contents' not in response:
-            return []
-        files = [obj['Key'].split('/')[-1] for obj in response['Contents'] 
-                if obj['Key'].endswith(extension)]
-        return sorted(files)
-    except:
+def get_local_files(directory, extension):
+    """List files locally with given extension"""
+    if not directory.exists():
         return []
+    files = [f.name for f in directory.glob(f'*{extension}')]
+    return sorted(files)
 
-available_models = get_s3_files(S3_PREFIX, '.pkl')
-available_datasets = get_s3_files(S3_PREFIX, '.csv')
+available_models = get_local_files(MODELS_DIR, '.pkl')
+available_datasets = get_local_files(DATA_DIR, '.csv')
 
 if not available_models:
-    available_models = ["model_simple.pkl"]
+    st.warning("⚠️ No .pkl models found")
+    available_models = ["No models available"]
+
 if not available_datasets:
-    available_datasets = ["wind_turbine_maintenance_data.csv"]
+    st.warning("⚠️ No .csv datasets found")
+    available_datasets = ["No datasets available"]
 
 # ============================================================================
-# LOAD DATA & MODEL FROM S3
+# LOAD DATA & MODEL FROM LOCAL FILES
 # ============================================================================
 
 @st.cache_data(ttl=300)
 def load_data(dataset_name):
-    """Load CSV from S3"""
+    """Load CSV locally"""
     try:
-        s3_key = f"{S3_PREFIX}{dataset_name}"
-        obj = s3_client.get_object(Bucket=S3_BUCKET, Key=s3_key)
-        df = pd.read_csv(obj['Body'])
+        filepath = DATA_DIR / dataset_name
+        df = pd.read_csv(filepath)
         if 'Turbine_ID' in df.columns:
             df = df[df['Turbine_ID'] == 1].reset_index(drop=True)
         return df
@@ -81,12 +75,10 @@ def load_data(dataset_name):
 
 @st.cache_resource
 def load_model(model_name):
-    """Load model from S3"""
+    """Load model locally"""
     try:
-        s3_key = f"{S3_PREFIX}{model_name}"
-        obj = s3_client.get_object(Bucket=S3_BUCKET, Key=s3_key)
-        model_bytes = BytesIO(obj['Body'].read())
-        return joblib.load(model_bytes)
+        filepath = MODELS_DIR / model_name
+        return joblib.load(filepath)
     except Exception as e:
         st.error(f"Error loading model: {str(e)}")
         return None
@@ -154,7 +146,7 @@ if st.session_state.last_dataset != dataset_choice:
 df = load_data(dataset_choice)
 model = load_model(model_choice)
 
-st.success(f"✅ Turbine 1: {df.shape[0]} rows | Model: {model_choice.split('/')[-1]} | {'✅ Ready' if model else '❌ Not found'}")
+# Message supprimé pour une UI épurée
 
 df_filtered = df.copy()
 if hours_limit:
@@ -168,6 +160,9 @@ selected_hour_in_period = st.sidebar.slider("View status at hour:",
                                             max_value=len(df_filtered)-1,
                                             value=len(df_filtered)-1,
                                             step=1)
+
+# Initialize engineering flag
+use_engineering = False
 
 # ============================================================================
 # FEATURE ENGINEERING
@@ -222,28 +217,42 @@ def engineer_features(df):
     
     return df
 
-# Apply feature engineering
-df_filtered = engineer_features(df_filtered)
-
 # ============================================================================
 # FEATURES FOR MODEL
 # ============================================================================
 
 # Check if model is a dict with feature_columns
 if isinstance(model, dict) and 'feature_columns' in model:
-    # Use the exact features the model was trained on
+    # Complex model: use dict structure
     feature_cols = model['feature_columns']
     model_obj = model['model']
     scaler = model.get('scaler', None)
     expected_features = len(feature_cols)
-else:
-    st.error("❌ Model format not recognized")
+    use_engineering = True
+    
+elif isinstance(model, dict):
+    st.error("❌ Dict model format not recognized")
     feature_cols = []
     model_obj = None
     scaler = None
     expected_features = 0
+    use_engineering = False
+    
+else:
+    # Simple model: use 8 raw features (no engineering)
+    feature_cols = ['Rotor_Speed_RPM', 'Wind_Speed_mps', 'Power_Output_kW', 
+                    'Gearbox_Oil_Temp_C', 'Generator_Bearing_Temp_C', 
+                    'Vibration_Level_mmps', 'Ambient_Temp_C', 'Humidity_pct']
+    model_obj = model
+    scaler = None
+    expected_features = len(feature_cols)
+    use_engineering = False
 
-st.info(f"ℹ️ Using {len(feature_cols)} features | Model expects {expected_features} features")
+# Apply feature engineering ONLY for complex models
+if use_engineering and isinstance(model, dict) and 'feature_columns' in model:
+    df_filtered = engineer_features(df_filtered)
+
+# Message de debug supprimé
 
 # ============================================================================
 # SECTION 1: REAL-TIME STATUS
