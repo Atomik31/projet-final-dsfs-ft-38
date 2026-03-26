@@ -14,7 +14,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: '3.10'
 
       - name: Install dependencies
         run: |
@@ -29,4 +29,4 @@ jobs:
 
       - name: Test dashboard startup
         run: timeout 10 streamlit run dashboard.py --logger.level=error 2>&1 | head -20 || true
-        
+
